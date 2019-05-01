@@ -13,4 +13,4 @@ def add_line_to_array(arr, line):
 
 
 if __name__ == '__main__':
-    array = reduce(add_line_to_array, [get_image_line(f'testdata/img{i+1}.png') for i in range(9)])
+    array = reduce(add_line_to_array, [get_image_line(f'testdata/img{i+1}.png') for i in range(9)]).transpose()
