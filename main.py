@@ -4,6 +4,7 @@ import networkx as nx
 from PIL import Image
 from functools import reduce
 from itertools import product
+from sklearn.decomposition import NMF
 
 
 def get_image_line(img_name):
@@ -15,14 +16,14 @@ def add_line(arr, line):
 
 
 # weighting function - heat kernel
-def f(t, y, i, j):
+def function_f(t, y, i, j):
     # t depends on the range of the labels, so as the distance between data increases
     # in the dependant variable space, the weight decreases accordingly.
     return np.exp(-np.linalg.norm(y[:, i] - y[:, j]) / t)
 
 
 # shortest path distance matrix
-def d(v):
+def matrix_d(v):
     # k-nearest neighbor graph with the Euclidean distance as edge weights is constructed
     graph = nx.Graph()
     graph.add_nodes_from(range(v.shape[1]))
@@ -35,57 +36,77 @@ def d(v):
     return distance_matrix
 
 
-def m(d, v, f, t, y, i, j):
-    if i == j:
-        raise ValueError
-    return np.nanmin(d(v)[i, j]) / np.linalg.norm(v[:, i] - v[:, j]) * f(t, y, i, j)
+def calculate_m(matrix_d, v, function_f, t, y, i, j):
+    return np.nanmin(matrix_d(v)[i, j]) / np.linalg.norm(v[:, i] - v[:, j]) * function_f(t, y, i, j) if i != j else \
+        function_f(t, y, i, j)
 
 
 # constraints to minimize the divergence
 
 
-def S_Rm(m, d, v, f, t, y, h):
+def calculate_S_Rm(calculate_m, matrix_d, v, function_f, t, y, h):
     # in order to produce regressing features, we want the data to be smoothly separated
     upper_sum, lower_sum = np.float_(0), np.float_(0)
     for i, j in product(range(h.shape[1]), range(h.shape[1])):
         if i != j:
-            upper_sum += m(d, v, f, t, y, i, j) * np.linalg.norm(h[:, i] - h[:, j])
-            lower_sum += m(d, v, f, t, y, i, j)
+            m = calculate_m(matrix_d, v, function_f, t, y, i, j)
+            upper_sum += m * np.linalg.norm(h[:, i] - h[:, j])
+            lower_sum += m
     return upper_sum / lower_sum
 
 
 # gradient based smoothing constraint
-def S_G(w):
+def calculate_S_G(w):
     # minimize the energy of the gradient of each of the basis W_j in the image coordinates
-    pass
+    return sum(np.trapz(np.square(np.gradient(w[:, j]))) for j in range(w.shape[1]))
 
 
 # this constraint attempts to minimize the number of basis components required to represent V
-def S_O(w):
-    return np.sum(w.T * w)
+def calculate_S_O(w):
+    return np.sum(np.matmul(w.T, w))
 
 
-def divergence(alpha, beta, gamma, S_Rm, m, d, v, f, t, y, h, S_G, w, S_O):
-    s = alpha * S_Rm(m, d, v, f, t, y, h) + beta * S_G(w) + gamma * S_O(w)
-    for i, j in product(range(v.shape[0]), range(v.shape[1])):
-        s += v[i, j] * np.log(v[i, j] / y[i, j]) - v[i, j] + y[i, j]
-    return s
+def divergence(alpha, beta, gamma, calculate_S_Rm, calculate_m, matrix_d, v, function_f, t, y, h, calculate_S_G, w, calculate_S_O):
+    return sum(v[i, j] * np.log(v[i, j] / y[i, j]) - v[i, j] + y[i, j]
+               for i, j in product(range(v.shape[0]), range(v.shape[1]))) \
+           + alpha * calculate_S_Rm(calculate_m, matrix_d, v, function_f, t, y, h) + beta * calculate_S_G(w) + gamma * calculate_S_O(w)
 
 
 # update rules
 
 
-def b():
+def calculate_b(alpha, calculate_m, matrix_d, v, function_f, t, y, h, k, l):
+    lower_sum = sum(calculate_m(matrix_d, v, function_f, t, y, i, j) for i, j in product(range(v.shape[0]), range(v.shape[1])))
+    upper_sum = sum(h[k, xk] * calculate_m(matrix_d, v, function_f, t, y, xk, l) for xk in range(h.shape[1]))
+    return 1 - 4 * alpha * upper_sum / lower_sum
+
+
+def update_h(calculate_b, alpha, calculate_m, matrix_d, v, function_f, t, y, h, k, l, w):
+    b = calculate_b(alpha, calculate_m, matrix_d, v, function_f, t, y, h, k, l)
+    big_sum = sum(v[i, l] * w[i, k] * h[k, l] / np.sum(w[i, xk] * h[xk, l] for xk in range(w.shape[1])) for i in range(v.shape[0]))
+    m_sum = sum(calculate_m(matrix_d, v, function_f, t, y, i, j) for i, j in product(range(v.shape[0]), range(v.shape[1])))
+    m = calculate_m(matrix_d, v, function_f, t, y, k, l)
+    return (-b + np.sqrt(np.square(b) + big_sum * 16 * alpha * m / m_sum)) / (8 * alpha * m / m_sum)
+
+
+def matrix_g(w):
     pass
 
 
-def update_h():
+def update_w_1(w, v, h, beta, ):
     pass
 
 
-def update_w():
+def update_w_2():
     pass
 
 
 if __name__ == '__main__':
     matrix = reduce(add_line, [get_image_line(f'testdata/img{i + 1}.png') for i in range(9)]).transpose()
+    for i, j in product(range(matrix.shape[0]), range(matrix.shape[1])):
+        matrix[i, j] += 1
+    model = NMF(2)
+    w = model.fit_transform(matrix)
+    h = model.components_
+    y = np.matmul(w, h)
+    print(divergence(1, 1, 1, calculate_S_Rm, calculate_m, matrix_d, matrix, function_f, 1, y, h, calculate_S_G, w, calculate_S_O))
