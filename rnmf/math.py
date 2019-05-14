@@ -41,20 +41,20 @@ def matrix_m(distance_matrix, v, y, t):
 # incorporating the regression methodology by imposing the following constraint
 def calculate_S_Rm(matrix_m, h):
     # in order to produce regressing features, we want the data to be smoothly separated
-    numer = sum(matrix_m[i, j] * np.linalg.norm(h[:, i] - h[:, j]) for i, j in nested_range((h.shape[1], h.shape[1])))
-    denom = sum(matrix_m[i, j] for i, j in nested_range((h.shape[1], h.shape[1])))
+    numer = sum(matrix_m[i, j] * np.linalg.norm(h[:, i] - h[:, j]) for i, j in nested_range(matrix_m.shape))
+    denom = sum(matrix_m[i, j] for i, j in nested_range(matrix_m.shape))
     return numer / denom
 
 
 # gradient based smoothing constraint
 def calculate_S_G(w):
     # minimize the energy of the gradient of each of the basis W_j in the image coordinates
-    return np.sum(np.trapz(np.square(np.gradient(w, axis=0))))
+    return np.trapz(np.square(np.gradient(w, axis=0))).sum()
 
 
 # this constraint attempts to minimize the number of basis components required to represent V
 def calculate_S_O(w):
-    return np.sum(np.matmul(w.T, w))
+    return np.matmul(w.T, w).sum()
 
 
 # the inclusion of the above three constraints leads to the following constrained divergence to be minimized
@@ -65,21 +65,25 @@ def divergence(alpha, beta, gamma, matrix_m, v, y, w, h):
         div -= v[i, j]
         if v[i, j] and y[i, j]:
             div += v[i, j] * np.log(v[i, j] / y[i, j]) + y[i, j]
-    return div
+    return np.min(div)
 
 
 # update rules found by minimization of the above cost function
 
 
 def calculate_b(alpha, matrix_m, h, k, l):
-    return 1 - 4 * alpha * sum(h[k, xk] * matrix_m[xk, l] for xk in range(h.shape[1])) / np.sum(matrix_m)
+    return 1 - 4 * alpha * sum(h[k, xk] * matrix_m[xk, l] for xk in range(h.shape[1])) / matrix_m.sum()
 
 
 def update_h(alpha, matrix_m, v, w, h, k, l):
     b = calculate_b(alpha, matrix_m, h, k, l)
-    big_sum = sum(v[i, l] * w[i, k] * h[k, l] / sum(w[i, xk] * h[xk, l] for xk in range(w.shape[1])) for i in range(v.shape[0]))
-    m_sum = np.sum(matrix_m)
-    return (-b + np.sqrt(np.square(b) + big_sum * 16 * alpha * matrix_m[k, l] / m_sum)) / (8 * alpha * matrix_m[k, l] / m_sum)
+    big_sum = np.float_(0)
+    for i in range(v.shape[0]):
+        small_sum = sum(w[i, xk] * h[xk, l] for xk in range(w.shape[1]))
+        if small_sum:
+            big_sum += v[i, l] * w[i, k] * h[k, l] / small_sum
+    val = 8 * alpha * matrix_m[k, l] / matrix_m.sum()
+    return (-b + np.sqrt(np.square(b) + big_sum * 2 * val)) / val
 
 
 def matrix_g(w):
@@ -87,13 +91,18 @@ def matrix_g(w):
 
 
 def update_w_1(beta, gamma, g, v, w, h, k, l):
-    numer = sum(v[k, j] * h[k, j] / sum(w[xk, l] * h[l, j] for xk in range(w.shape[0])) for j in range(v.shape[1]))
-    denom = np.sum(h[l, :]) + beta * g[k, l] + gamma * np.sum(w[k, :])
+    numer = np.float_(0)
+    for j in range(v.shape[1]):
+        small_sum = sum(w[xk, l] * h[l, j] for xk in range(w.shape[0]))
+        if small_sum:
+            numer += v[k, j] * h[l, j] / small_sum
+    denom = h[l, :].sum() + beta * g[k, l] + gamma * w[k, :].sum()
     return numer / denom
 
 
 def update_w_2(w, k, l):
-    return w[k, l] / np.sum(w[:, l])
+    column_sum = w[:, l].sum()
+    return w[k, l] / column_sum if column_sum else 0
 
 
 def minimize(v, difference):
@@ -103,7 +112,7 @@ def minimize(v, difference):
     y = np.matmul(w, h)
     distance_matrix = shortest_path_distance_matrix(v)
     m = matrix_m(distance_matrix, v, y, 1)
-    prev_div, new_div = 0, divergence(1, 1, 1, m, v, y, w, h)
+    prev_div, new_div = np.float_(0), divergence(1, 1, 1, m, v, y, w, h)
     while np.abs(new_div - prev_div) > difference:
         # update h
         new_h = np.empty(h.shape, np.float_)
