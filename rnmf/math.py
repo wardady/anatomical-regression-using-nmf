@@ -20,7 +20,7 @@ def shortest_path_distance_matrix(v):
     # k-nearest neighbor graph with the Euclidean distance as edge weights is constructed
     graph = nx.Graph()
     graph.add_nodes_from(range(v.shape[1]))
-    for i, j in product(range(v.shape[1]), range(v.shape[1])):
+    for i, j in nested_range((v.shape[1], v.shape[1])):
         graph.add_edge(i, j, weight=np.linalg.norm(v[:, i] - v[:, j]) if i != j else np.nan)
     # shortest path distance matrix D on the graph is calculated using Floyd's algorithm
     return nx.algorithms.shortest_paths.floyd_warshall_numpy(graph)
@@ -28,10 +28,10 @@ def shortest_path_distance_matrix(v):
 
 def matrix_m(distance_matrix, v, y, t):
     # weights are inversely proportional to the geodesic distance between the sample points, thus penalizing outliers
-    m = np.empty(v.shape, np.float_)
-    for i, j in nested_range(v.shape):
-        m[i, j] = np.nanmin(distance_matrix[i, j]) / np.linalg.norm(v[:, i] - v[:, j]) * heat_kernel(y, t, i, j) \
-            if i != j else heat_kernel(y, t, i, j)
+    m = np.empty((v.shape[1], v.shape[1]), np.float_)
+    for i, j in nested_range(m.shape):
+        m[i, j] = np.nanmin(distance_matrix[i, j]) / distance_matrix[i, j] * heat_kernel(y, t, i, j) if i != j \
+            else heat_kernel(y, t, i, j)
     return m
 
 
@@ -65,7 +65,7 @@ def divergence(alpha, beta, gamma, matrix_m, v, y, w, h):
         div -= v[i, j]
         if v[i, j] and y[i, j]:
             div += v[i, j] * np.log(v[i, j] / y[i, j]) + y[i, j]
-    return np.min(div)
+    return div
 
 
 # update rules found by minimization of the above cost function
@@ -105,14 +105,14 @@ def update_w_2(w, k, l):
     return w[k, l] / column_sum if column_sum else 0
 
 
-def minimize(v, difference):
+def minimize(v, difference, alpha, beta, gamma, t):
     model = NMF(2)
     w = model.fit_transform(v)
     h = model.components_
     y = np.matmul(w, h)
     distance_matrix = shortest_path_distance_matrix(v)
-    m = matrix_m(distance_matrix, v, y, 1)
-    prev_div, new_div = np.float_(0), divergence(1, 1, 1, m, v, y, w, h)
+    m = matrix_m(distance_matrix, v, y, t)
+    prev_div, new_div = np.inf, divergence(alpha, beta, gamma, m, v, y, w, h)
     while np.abs(new_div - prev_div) > difference:
         # update h
         new_h = np.empty(h.shape, np.float_)
@@ -128,6 +128,6 @@ def minimize(v, difference):
             w[k, l] = update_w_2(new_w, k, l)
         # update variables
         y = np.matmul(w, h)
-        distance_matrix = shortest_path_distance_matrix(v)
-        m = matrix_m(distance_matrix, v, y, 1)
-        prev_div, new_div = prev_div, divergence(1, 1, 1, m, v, y, w, h)
+        m = matrix_m(distance_matrix, v, y, t)
+        prev_div, new_div = np.inf, divergence(alpha, beta, gamma, m, v, y, w, h)
+    return y, w, h
